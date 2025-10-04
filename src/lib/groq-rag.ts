@@ -157,6 +157,44 @@ export class GroqRAG {
     return null;
   }
 
+  // Context-aware product extraction
+  extract_product_name_with_context(question: string, conversationContext?: string): string | null {
+    const q_lower = question.toLowerCase();
+    
+    // Check for reference words first
+    const referenceWords = ['itu', 'tadi', 'sebelumnya', 'yang', 'produk', 'item', 'berapa', 'harga', 'cara', 'kandungan', 'keunggulan'];
+    const hasReference = referenceWords.some(word => q_lower.includes(word));
+    
+    if (hasReference && conversationContext) {
+      console.log(`🔍 Checking context for reference: ${conversationContext}`);
+      
+      // Try to extract last mentioned product from context
+      const contextLines = conversationContext.split('\n');
+      for (const line of contextLines) {
+        if (line.includes('Produk yang sedang dibicarakan:')) {
+          const lastProduct = line.replace('Produk yang sedang dibicarakan:', '').trim();
+          if (lastProduct && lastProduct !== 'null') {
+            console.log(`🔄 Using context product: ${lastProduct}`);
+            return lastProduct;
+          }
+        }
+      }
+      
+      // Alternative: look for product names in conversation history
+      for (const line of contextLines) {
+        for (const product of this.product_names) {
+          if (line.toLowerCase().includes(product.toLowerCase())) {
+            console.log(`🔄 Found product in context: ${product}`);
+            return product;
+          }
+        }
+      }
+    }
+    
+    // Fallback to regular product extraction
+    return this.extract_product_name(question);
+  }
+
   normalize_query(text: string): string {
     return text.toLowerCase().replace(/\s+/g, ' ').trim();
   }
@@ -377,7 +415,7 @@ export class GroqRAG {
     }
     
     // Pattern untuk pertanyaan berat/gram
-    if (['berapa g', 'berapa gram', 'berat', 'gram', ' g ', 'berapa gr'].some(word => q_lower.includes(word))) {
+    if (['berapa g', 'berapa gram', 'berat', 'gram', ' g ', 'berapa gr', 'beratnya'].some(word => q_lower.includes(word))) {
       console.log('\n🔍 DEBUG: Mencari pattern berat/gram...');
       for (let i = 0; i < matches.length; i++) {
         const match = matches[i];
@@ -408,6 +446,8 @@ export class GroqRAG {
         }
       }
       console.log('  ⚠️ No gram pattern found in any match\n');
+      // Jika tidak ada pattern gram ditemukan, return informasi tidak tersedia
+      return 'Informasi tidak tersedia';
     }
     
     // Pattern untuk harga
@@ -431,15 +471,30 @@ export class GroqRAG {
         const text = match.metadata?.chunk_text || '';
         const section = match.metadata?.section || '';
         console.log(`📝 Checking text: ${text.substring(0, 100)}...`);
+        console.log(`📝 Section: ${section}`);
         
-        // Cari section "Cara Pakai" atau teks yang mengandung instruksi
-        if (section.toLowerCase().includes('cara pakai') || 
-            text.toLowerCase().includes('cara pakai') || 
-            text.toLowerCase().includes('cara menggunakan') ||
-            text.match(/\d+\.\s+/) || // Pattern: 1. 2. 3. (numbered steps)
-            text.toLowerCase().includes('aplikasikan')) {
+        // PRIORITAS: Cari section yang benar-benar "Cara Pakai"
+        if (section.toLowerCase().includes('cara pakai')) {
           const product = match.metadata?.product || 'Produk';
-          console.log(`✅ Found usage instructions for ${product}`);
+          console.log(`✅ Found usage instructions section for ${product}`);
+          
+          // Format text dengan line breaks untuk poin-poin
+          const formattedText = text
+            .replace(/(\d+\.\s+)/g, '\n$1') // Tambah line break sebelum angka
+            .replace(/([.!?])\s*([A-Z])/g, '$1\n$2') // Line break setelah titik
+            .trim();
+          
+          return `**Cara Pakai ${product}:**\n${formattedText}`;
+        }
+        
+        // FALLBACK: Cari teks yang mengandung instruksi spesifik (bukan kandungan)
+        if (text.toLowerCase().includes('cara pakai') && 
+            !text.toLowerCase().includes('kandungan') &&
+            !text.toLowerCase().includes('surfaktan') &&
+            !text.toLowerCase().includes('amino') &&
+            (text.match(/\d+\.\s+/) || text.toLowerCase().includes('aplikasikan') || text.toLowerCase().includes('tuangkan') || text.toLowerCase().includes('pump'))) {
+          const product = match.metadata?.product || 'Produk';
+          console.log(`✅ Found usage instructions text for ${product}`);
           
           // Format text dengan line breaks untuk poin-poin
           const formattedText = text
@@ -525,22 +580,37 @@ export class GroqRAG {
     }
     
     // Pattern untuk skin type/jenis kulit
-    if (['skin type', 'jenis kulit', 'untuk kulit', 'aman untuk', 'cocok untuk'].some(word => q_lower.includes(word))) {
+    if (['skin type', 'jenis kulit', 'untuk kulit', 'aman untuk', 'cocok untuk', 'sensitif', 'kulit'].some(word => q_lower.includes(word))) {
       console.log('🔍 Looking for skin type pattern...');
+      
+      // Cari informasi skin type yang spesifik untuk produk yang sedang dibicarakan
       for (const match of matches) {
         const text = match.metadata?.chunk_text || '';
         const section = match.metadata?.section || '';
+        const currentProduct = match.metadata?.product;
         
+        if (!currentProduct) continue;
+        
+        // Cari text yang mengandung informasi skin type yang relevan
         if (text.toLowerCase().includes('all skin type') || 
             text.toLowerCase().includes('semua jenis kulit') ||
             text.toLowerCase().includes('kecuali acne') ||
             text.toLowerCase().includes('kulit sensitif') ||
             text.toLowerCase().includes('kulit normal') ||
             text.toLowerCase().includes('kulit berminyak') ||
-            text.toLowerCase().includes('kulit kering')) {
-          const product = match.metadata?.product || 'Produk';
-          console.log(`✅ Found skin type info for ${product}`);
-          return `${product} cocok untuk ${text}`;
+            text.toLowerCase().includes('kulit kering') ||
+            text.toLowerCase().includes('for all skin type')) {
+          
+          // Extract hanya bagian yang relevan tentang skin type
+          let skinTypeInfo = text;
+          if (text.toLowerCase().includes('all skin type')) {
+            skinTypeInfo = 'All Skin Type';
+          } else if (text.toLowerCase().includes('kecuali acne')) {
+            skinTypeInfo = 'All Skin Type (kecuali acne)';
+          }
+          
+          console.log(`✅ Found skin type info for ${currentProduct}`);
+          return `${currentProduct} cocok untuk ${skinTypeInfo}`;
         }
       }
     }
@@ -670,6 +740,35 @@ export class GroqRAG {
     return null;
   }
 
+  // Context-aware direct answer extraction
+  extract_direct_answer_with_context(question: string, matches: any[], conversationContext?: string): string | null {
+    const q_lower = question.toLowerCase();
+    
+    // Extract current product from context
+    let currentProduct: string | null = null;
+    if (conversationContext) {
+      const contextLines = conversationContext.split('\n');
+      for (const line of contextLines) {
+        if (line.includes('Produk yang sedang dibicarakan:')) {
+          currentProduct = line.replace('Produk yang sedang dibicarakan:', '').trim();
+          break;
+        }
+      }
+    }
+    
+    // Filter matches to only include current product if context is available
+    let filteredMatches = matches;
+    if (currentProduct && currentProduct !== 'null') {
+      filteredMatches = matches.filter(match => 
+        match.metadata?.product === currentProduct
+      );
+      console.log(`🔍 Filtering matches for product: ${currentProduct}, found ${filteredMatches.length} matches`);
+    }
+    
+    // Use filtered matches for direct answer extraction
+    return this.extract_direct_answer(question, filteredMatches);
+  }
+
   async generate_answer(question: string, context: string, matches: any[]): Promise<string> {
     // Coba extract jawaban langsung dulu
     const direct_answer = this.extract_direct_answer(question, matches);
@@ -709,7 +808,55 @@ JAWABAN:`;
     }
   }
 
-  async ask_question(question: string): Promise<{
+  // Context-aware answer generation
+  async generate_answer_with_context(question: string, context: string, matches: any[], conversationContext?: string): Promise<string> {
+    // Coba extract jawaban langsung dulu dengan context awareness
+    const direct_answer = this.extract_direct_answer_with_context(question, matches, conversationContext);
+    if (direct_answer) {
+      return direct_answer;
+    }
+    
+    // Jika tidak bisa extract langsung, pakai LLM dengan context
+    let prompt = `Jawab pertanyaan berdasarkan informasi di bawah. PENTING: Baca semua informasi dengan teliti!
+
+INFORMASI:
+${context}
+
+PERTANYAAN: ${question}`;
+
+    // Add conversation context if available
+    if (conversationContext) {
+      prompt += `\n\nKONTEKS PERCAKAPAN:
+${conversationContext}`;
+    }
+
+    prompt += `\n\nINSTRUKSI:
+- Cari angka/nilai yang tepat (ml, gram, gr, g, Rp, %, dll)
+- Jika ada angka di awal kalimat seperti "12 gr" atau "150 ml", SEBUTKAN angka tersebut
+- Contoh: "12 gr Bedak..." berarti beratnya adalah 12 gr
+- Jawab singkat dan langsung
+- Jika tidak ada informasi, katakan "Informasi tidak tersedia"
+- Jika ada konteks percakapan, gunakan untuk memahami referensi seperti "itu", "tadi", "sebelumnya"
+- Berikan jawaban yang natural dan mengalir berdasarkan konteks percakapan
+
+JAWABAN:`;
+
+    try {
+      const response = await this.groq_client.chat.completions.create({
+        model: "llama-3.3-70b-versatile",
+        messages: [{ role: "user", content: prompt }],
+        temperature: 0,
+        max_tokens: 400
+      });
+      
+      return response.choices[0]?.message?.content?.trim() || "Maaf, tidak dapat menghasilkan jawaban.";
+    } catch (error) {
+      console.error('Groq API error:', error);
+      return "Maaf, terjadi kesalahan saat memproses pertanyaan Anda.";
+    }
+  }
+
+  async ask_question(question: string, conversationContext?: string): Promise<{
     answer: string;
     productDetected: string | null;
     totalMatches: number;
@@ -717,8 +864,8 @@ JAWABAN:`;
   }> {
     console.log('\n🔍 Analyzing question...');
     
-    // Extract product name dari pertanyaan
-    const product_name = this.extract_product_name(question);
+    // Extract product name dari pertanyaan dengan context
+    const product_name = this.extract_product_name_with_context(question, conversationContext);
     
     if (product_name) {
       console.log(`✅ Detected product: '${product_name}'`);
@@ -743,7 +890,7 @@ JAWABAN:`;
     console.log('🤖 Generating jawaban...');
     
     const context = this.prepare_context(matches);
-    const answer = await this.generate_answer(question, context, matches);
+    const answer = await this.generate_answer_with_context(question, context, matches, conversationContext);
     
     return {
       answer,

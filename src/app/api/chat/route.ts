@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { GroqRAG } from '@/lib/groq-rag';
+import { sessionManager, ConversationMessage } from '@/lib/session-manager';
 
 // Initialize GroqRAG instance
 let groqRAG: GroqRAG | null = null;
@@ -28,7 +29,7 @@ async function getGroqRAG() {
 
 export async function POST(request: NextRequest) {
   try {
-    const { question } = await request.json();
+    const { question, sessionId } = await request.json();
     
     if (!question || typeof question !== 'string') {
       return NextResponse.json(
@@ -37,6 +38,9 @@ export async function POST(request: NextRequest) {
       );
     }
 
+    // Generate session ID if not provided
+    const currentSessionId = sessionId || sessionManager.generateSessionId();
+    
     const rag = await getGroqRAG();
     
     // Test Pinecone connection first
@@ -49,13 +53,36 @@ export async function POST(request: NextRequest) {
       }, { status: 500 });
     }
     
-    // Use the new ask_question method
-    const result = await rag.ask_question(question);
+    // Get conversation context
+    const conversationContext = sessionManager.getConversationContext(currentSessionId);
+    
+    // Use the context-aware ask_question method
+    const result = await rag.ask_question(question, conversationContext);
+    
+    // Store user message
+    const userMessage: ConversationMessage = {
+      id: `user_${Date.now()}`,
+      timestamp: new Date(),
+      type: 'user',
+      content: question
+    };
+    sessionManager.addMessage(currentSessionId, userMessage);
+    
+    // Store assistant response
+    const assistantMessage: ConversationMessage = {
+      id: `assistant_${Date.now()}`,
+      timestamp: new Date(),
+      type: 'assistant',
+      content: result.answer,
+      productDetected: result.productDetected || undefined
+    };
+    sessionManager.addMessage(currentSessionId, assistantMessage);
     
     return NextResponse.json({
       answer: result.answer,
       productDetected: result.productDetected,
-      totalMatches: result.totalMatches
+      totalMatches: result.totalMatches,
+      sessionId: currentSessionId
     });
 
   } catch (error) {

@@ -15,6 +15,7 @@ export default function ChatInterface() {
   const [messages, setMessages] = useState<Message[]>([]);
   const [inputValue, setInputValue] = useState('');
   const [isLoading, setIsLoading] = useState(false);
+  const [sessionId, setSessionId] = useState<string | null>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
   const scrollToBottom = () => {
@@ -46,13 +47,21 @@ export default function ChatInterface() {
         headers: {
           'Content-Type': 'application/json',
         },
-        body: JSON.stringify({ question: inputValue.trim() }),
+        body: JSON.stringify({ 
+          question: inputValue.trim(),
+          sessionId: sessionId 
+        }),
       });
 
       const data = await response.json();
 
       if (!response.ok) {
         throw new Error(data.error || 'Something went wrong');
+      }
+
+      // Store session ID from first response
+      if (!sessionId && data.sessionId) {
+        setSessionId(data.sessionId);
       }
 
       const botMessage: Message = {
@@ -243,7 +252,6 @@ export default function ChatInterface() {
               <div className="bg-white text-gray-800 shadow-xl border border-gray-200/50 rounded-3xl p-6">
                 <div className="flex items-center space-x-3">
                   <div className="animate-spin rounded-full h-5 w-5 border-2 border-yellow-500 border-t-transparent"></div>
-                  <span className="text-sm text-gray-600 font-light">Consulting...</span>
                 </div>
               </div>
             </div>
