@@ -47,7 +47,13 @@ class SessionManager {
     
     // Update last product mentioned if detected
     if (message.productDetected) {
-      session.lastProductMentioned = message.productDetected;
+      // Clear context if general "Crystallure" is detected (to prevent context pollution)
+      if (message.productDetected === 'Crystallure') {
+        console.log(`🧹 Clearing context due to general Crystallure detection`);
+        session.lastProductMentioned = undefined;
+      } else {
+        session.lastProductMentioned = message.productDetected;
+      }
     }
     
     // Keep only last 10 messages to avoid memory bloat
